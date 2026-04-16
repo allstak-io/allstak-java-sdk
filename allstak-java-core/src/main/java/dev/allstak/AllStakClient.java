@@ -1,0 +1,481 @@
+package dev.allstak;
+
+import dev.allstak.buffer.RingBuffer;
+import dev.allstak.internal.FlushWorker;
+import dev.allstak.internal.SdkLogger;
+import dev.allstak.masking.DataMasker;
+import dev.allstak.model.*;
+import dev.allstak.transport.HttpTransport;
+
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * Core AllStak SDK client. Manages buffering, flushing, and sending telemetry data.
+ * Thread-safe. One instance per application.
+ */
+public final class AllStakClient {
+
+    private static final String PATH_ERRORS = "/ingest/v1/errors";
+    private static final String PATH_LOGS = "/ingest/v1/logs";
+    private static final String PATH_HTTP_REQUESTS = "/ingest/v1/http-requests";
+    private static final String PATH_HEARTBEAT = "/ingest/v1/heartbeat";
+    private static final String PATH_DB_QUERIES = "/ingest/v1/db";
+    private static final String PATH_SPANS = "/ingest/v1/spans";
+
+    private static final int HTTP_BATCH_MAX = 100;
+    private static final int DB_BATCH_MAX = 100;
+    private static final int MAX_STACK_FRAMES = 100;
+    private static final int BREADCRUMB_BUFFER_SIZE = 50;
+
+    private static final ThreadLocal<RequestContext> currentRequestContext = new ThreadLocal<>();
+
+    public static void setRequestContext(RequestContext ctx) { currentRequestContext.set(ctx); }
+    public static void clearRequestContext() { currentRequestContext.remove(); }
+    public static RequestContext getRequestContext() { return currentRequestContext.get(); }
+
+    private final AllStakConfig config;
+    private final HttpTransport transport;
+
+    // Buffers
+    private final RingBuffer<LogEvent> logBuffer;
+    private final RingBuffer<HttpRequestItem> httpBuffer;
+    private final RingBuffer<Breadcrumb> breadcrumbBuffer;
+    private final RingBuffer<DatabaseQueryItem> dbQueryBuffer;
+
+    // Flush workers
+    private final FlushWorker<LogEvent> logFlusher;
+    private final FlushWorker<HttpRequestItem> httpFlusher;
+    private final FlushWorker<DatabaseQueryItem> dbQueryFlusher;
+
+    // User context (set globally)
+    private volatile UserContext currentUser;
+
+    private final AtomicBoolean shutdown = new AtomicBoolean(false);
+
+    public AllStakClient(AllStakConfig config) {
+        this(config, new HttpTransport(config.getHost(), config.getApiKey()));
+    }
+
+    // Visible for testing — allows injecting a custom transport
+    public AllStakClient(AllStakConfig config, HttpTransport transport) {
+        this.config = config;
+        this.transport = transport;
+
+        SdkLogger.setDebug(config.isDebug());
+
+        this.logBuffer = new RingBuffer<>(config.getBufferSize());
+        this.httpBuffer = new RingBuffer<>(config.getBufferSize());
+        this.breadcrumbBuffer = new RingBuffer<>(BREADCRUMB_BUFFER_SIZE);
+        this.dbQueryBuffer = new RingBuffer<>(config.getBufferSize());
+
+        // Log flush worker — sends one log per request
+        this.logFlusher = new FlushWorker<>("logs", logBuffer, logs -> {
+            for (LogEvent log : logs) {
+                transport.send(PATH_LOGS, log);
+            }
+            return true;
+        });
+
+        // HTTP request flush worker — sends in batches of up to 100
+        this.httpFlusher = new FlushWorker<>("http-requests", httpBuffer, items -> {
+            for (int i = 0; i < items.size(); i += HTTP_BATCH_MAX) {
+                List<HttpRequestItem> batch = items.subList(i, Math.min(i + HTTP_BATCH_MAX, items.size()));
+                transport.send(PATH_HTTP_REQUESTS, new HttpRequestBatch(batch));
+            }
+            return true;
+        });
+
+        // DB query flush worker — sends in batches of up to 100
+        this.dbQueryFlusher = new FlushWorker<>("db-queries", dbQueryBuffer, items -> {
+            for (int i = 0; i < items.size(); i += DB_BATCH_MAX) {
+                List<DatabaseQueryItem> batch = items.subList(i, Math.min(i + DB_BATCH_MAX, items.size()));
+                transport.send(PATH_DB_QUERIES, new DatabaseQueryBatch(batch));
+            }
+            return true;
+        });
+
+        // Start flush workers
+        logFlusher.start(config.getFlushIntervalMs());
+        httpFlusher.start(config.getFlushIntervalMs());
+        dbQueryFlusher.start(config.getFlushIntervalMs());
+
+        SdkLogger.debug("AllStak SDK initialized — host={}, env={}, release={}",
+                config.getHost(), config.getEnvironment(), config.getRelease());
+    }
+
+    // =========================================================================
+    // Error Capture — sent immediately (errors are urgent)
+    // =========================================================================
+
+    public void captureException(Throwable throwable) {
+        captureException(throwable, null);
+    }
+
+    public void captureException(Throwable throwable, Map<String, Object> metadata) {
+        captureException(throwable, "error", metadata);
+    }
+
+    public void captureException(Throwable throwable, String level, Map<String, Object> metadata) {
+        try {
+            if (shutdown.get() || transport.isDisabled()) return;
+
+            String exceptionClass = throwable.getClass().getName();
+            String message = throwable.getMessage() != null ? throwable.getMessage() : exceptionClass;
+            List<String> stackTrace = extractStackTrace(throwable);
+
+            Map<String, Object> maskedMetadata = DataMasker.maskMetadata(metadata);
+
+            // Attach request context if available on this thread
+            RequestContext reqCtx = currentRequestContext.get();
+            String traceId = reqCtx != null ? reqCtx.getTraceId() : null;
+            RequestContext eventReqCtx = reqCtx != null
+                    ? RequestContext.of(
+                            reqCtx.getMethod(),
+                            reqCtx.getPath(),
+                            reqCtx.getHost(),
+                            reqCtx.getStatusCode(),
+                            reqCtx.getUserAgent(),
+                            traceId)
+                    : null;
+
+            // Drain breadcrumbs and attach to error event
+            List<Breadcrumb> breadcrumbs = breadcrumbBuffer.drain();
+            List<Breadcrumb> eventBreadcrumbs = breadcrumbs.isEmpty() ? null : breadcrumbs;
+
+            ErrorEvent event = new ErrorEvent(
+                    exceptionClass,
+                    message,
+                    stackTrace,
+                    level != null ? level : "error",
+                    config.getEnvironment(),
+                    config.getRelease(),
+                    null, // sessionId — not applicable for server SDK
+                    currentUser,
+                    maskedMetadata,
+                    traceId,
+                    eventReqCtx,
+                    eventBreadcrumbs
+            );
+
+            // Errors are sent immediately — no buffering
+            transport.send(PATH_ERRORS, event);
+        } catch (Exception e) {
+            SdkLogger.debug("Failed to capture exception: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // Log Capture — buffered, flushed on timer/capacity
+    // =========================================================================
+
+    public void captureLog(String level, String message) {
+        captureLog(level, message, null);
+    }
+
+    public void captureLog(String level, String message, Map<String, Object> metadata) {
+        captureLog(level, message, null, null, metadata);
+    }
+
+    public void captureLog(String level, String message, String service,
+                           String traceId, Map<String, Object> metadata) {
+        captureLog(level, message, service, traceId, null, null, null, null, null, metadata);
+    }
+
+    public void captureLog(String level, String message, String service,
+                           String traceId, String environment, String spanId,
+                           String requestId, String userId, String errorId,
+                           Map<String, Object> metadata) {
+        try {
+            if (shutdown.get() || transport.isDisabled()) return;
+
+            if (!isValidLogLevel(level)) {
+                SdkLogger.debug("Invalid log level '{}' — dropping log", level);
+                return;
+            }
+
+            if (config.isAutoBreadcrumbs() && ("warn".equals(level) || "error".equals(level) || "fatal".equals(level))) {
+                breadcrumbBuffer.add(new Breadcrumb("log", message, level, metadata));
+            }
+
+            Map<String, Object> maskedMetadata = DataMasker.maskMetadata(metadata);
+            String svc = service != null ? service : config.getServiceName();
+            String env = environment != null ? environment : config.getEnvironment();
+
+            LogEvent event = new LogEvent(level, message, svc, traceId, env, spanId,
+                    requestId, userId, errorId, maskedMetadata);
+            logBuffer.add(event);
+            logFlusher.checkCapacityFlush();
+        } catch (Exception e) {
+            SdkLogger.debug("Failed to capture log: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // HTTP Request Monitoring — buffered, flushed in batches of up to 100
+    // =========================================================================
+
+    public void captureHttpRequest(HttpRequestItem item) {
+        try {
+            if (shutdown.get() || transport.isDisabled()) return;
+
+            // Strip query parameters from path, preserve all other fields
+            HttpRequestItem sanitized = HttpRequestItem.builder()
+                    .traceId(item.getTraceId())
+                    .spanId(item.getSpanId())
+                    .parentSpanId(item.getParentSpanId())
+                    .direction(item.getDirection())
+                    .method(item.getMethod())
+                    .host(item.getHost())
+                    .path(DataMasker.stripSensitiveQueryParams(item.getPath()))
+                    .statusCode(item.getStatusCode())
+                    .durationMs(item.getDurationMs())
+                    .requestSize(item.getRequestSize())
+                    .responseSize(item.getResponseSize())
+                    .userId(item.getUserId())
+                    .errorFingerprint(item.getErrorFingerprint())
+                    .timestamp(item.getTimestamp())
+                    .requestHeaders(item.getRequestHeaders())
+                    .responseHeaders(item.getResponseHeaders())
+                    .requestBody(item.getRequestBody())
+                    .responseBody(item.getResponseBody())
+                    .environment(item.getEnvironment())
+                    .release(item.getRelease())
+                    .build();
+
+            httpBuffer.add(sanitized);
+            httpFlusher.checkCapacityFlush();
+        } catch (Exception e) {
+            SdkLogger.debug("Failed to capture HTTP request: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // Database Query Monitoring — buffered, flushed in batches of up to 100
+    // =========================================================================
+
+    public void captureDbQuery(DatabaseQueryItem item) {
+        try {
+            if (shutdown.get() || transport.isDisabled()) return;
+
+            // Enrich with config defaults if not set
+            DatabaseQueryItem enriched = DatabaseQueryItem.builder()
+                    .normalizedQuery(item.getNormalizedQuery())
+                    .queryHash(item.getQueryHash())
+                    .queryType(item.getQueryType())
+                    .durationMs(item.getDurationMs())
+                    .timestampMillis(item.getTimestampMillis())
+                    .status(item.getStatus())
+                    .errorMessage(item.getErrorMessage())
+                    .databaseName(item.getDatabaseName())
+                    .databaseType(item.getDatabaseType())
+                    .service(item.getService() != null ? item.getService() : config.getServiceName())
+                    .environment(item.getEnvironment() != null ? item.getEnvironment() : config.getEnvironment())
+                    .traceId(item.getTraceId())
+                    .spanId(item.getSpanId())
+                    .rowsAffected(item.getRowsAffected())
+                    .build();
+
+            dbQueryBuffer.add(enriched);
+            dbQueryFlusher.checkCapacityFlush();
+        } catch (Exception e) {
+            SdkLogger.debug("Failed to capture DB query: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // Cron Job Monitoring — sent immediately after job completes
+    // =========================================================================
+
+    public JobHandle startJob(String slug) {
+        if (slug == null || !slug.matches("^[a-z0-9\\-]+$")) {
+            SdkLogger.debug("Invalid cron slug '{}' — must be lowercase alphanumeric with hyphens", slug);
+            return new JobHandle(slug != null ? slug : "unknown", System.currentTimeMillis());
+        }
+        return new JobHandle(slug, System.currentTimeMillis());
+    }
+
+    public void finishJob(JobHandle handle, String status) {
+        finishJob(handle, status, null);
+    }
+
+    public void finishJob(JobHandle handle, String status, String message) {
+        try {
+            if (shutdown.get() || transport.isDisabled()) return;
+
+            long durationMs = System.currentTimeMillis() - handle.getStartTimeMs();
+            String normalizedStatus = status != null ? status.toLowerCase() : "success";
+
+            HeartbeatEvent event = new HeartbeatEvent(
+                    handle.getSlug(),
+                    normalizedStatus,
+                    durationMs,
+                    message
+            );
+
+            // Heartbeats are sent immediately
+            transport.send(PATH_HEARTBEAT, event);
+        } catch (Exception e) {
+            SdkLogger.debug("Failed to send heartbeat: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // User Context
+    // =========================================================================
+
+    public void setUser(UserContext user) {
+        this.currentUser = user;
+    }
+
+    public void clearUser() {
+        this.currentUser = null;
+    }
+
+    // =========================================================================
+    // Breadcrumbs
+    // =========================================================================
+
+    /**
+     * Add a breadcrumb to the ring buffer. Breadcrumbs are attached to the next
+     * captured error event and then cleared.
+     *
+     * @param type    Category of the breadcrumb ("http", "log", "ui", "navigation", "query", "default").
+     * @param message Human-readable description.
+     * @param level   Severity level ("info", "warn", "error", "debug"). Defaults to "info" if null.
+     * @param data    Optional key-value data.
+     */
+    public void addBreadcrumb(String type, String message, String level, Map<String, Object> data) {
+        if (shutdown.get()) return;
+        Map<String, Object> safeData = DataMasker.maskMetadata(data);
+        breadcrumbBuffer.add(new Breadcrumb(type, message, level, safeData));
+    }
+
+    public void addBreadcrumb(String type, String message) {
+        addBreadcrumb(type, message, null, null);
+    }
+
+    /**
+     * Clear all breadcrumbs from the buffer.
+     */
+    public void clearBreadcrumbs() {
+        breadcrumbBuffer.drain();
+    }
+
+    // =========================================================================
+    // Span Capture — sent immediately
+    // =========================================================================
+
+    public void captureSpan(String traceId, String spanId, String parentSpanId,
+                            String operation, String description, String status,
+                            long durationMs, long startTimeMillis, long endTimeMillis,
+                            String service, String environment, Map<String, String> tags) {
+        if (shutdown.get() || transport.isDisabled()) return;
+        try {
+            Map<String, Object> span = new LinkedHashMap<>();
+            span.put("traceId", traceId);
+            span.put("spanId", spanId);
+            span.put("parentSpanId", parentSpanId != null ? parentSpanId : "");
+            span.put("operation", operation);
+            span.put("description", description != null ? description : "");
+            span.put("status", status);
+            span.put("durationMs", durationMs);
+            span.put("startTimeMillis", startTimeMillis);
+            span.put("endTimeMillis", endTimeMillis);
+            span.put("service", service != null ? service : config.getServiceName());
+            span.put("environment", environment != null ? environment : config.getEnvironment());
+            span.put("tags", tags != null ? tags : Map.of());
+            span.put("data", "");
+
+            Map<String, Object> payload = Map.of("spans", List.of(span));
+            transport.send(PATH_SPANS, payload);
+        } catch (Exception e) {
+            SdkLogger.debug("Failed to capture span: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // Flush & Shutdown
+    // =========================================================================
+
+    public void flush() {
+        try {
+            logFlusher.flush();
+            httpFlusher.flush();
+            dbQueryFlusher.flush();
+        } catch (Exception e) {
+            SdkLogger.debug("Flush failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Alias for {@link #shutdown()} — provided for convenience.
+     */
+    public void destroy() {
+        shutdown();
+    }
+
+    public void shutdown() {
+        if (shutdown.compareAndSet(false, true)) {
+            SdkLogger.debug("AllStak SDK shutting down...");
+            logFlusher.shutdown();
+            httpFlusher.shutdown();
+            dbQueryFlusher.shutdown();
+            SdkLogger.debug("AllStak SDK shut down complete");
+        }
+    }
+
+    // =========================================================================
+    // Accessors
+    // =========================================================================
+
+    public AllStakConfig getConfig() { return config; }
+    public HttpTransport getTransport() { return transport; }
+    public boolean isShutdown() { return shutdown.get(); }
+
+    // =========================================================================
+    // Internal
+    // =========================================================================
+
+    private List<String> extractStackTrace(Throwable throwable) {
+        List<String> result = new ArrayList<>();
+        int totalFrames = 0;
+        Throwable current = throwable;
+        boolean isFirst = true;
+
+        while (current != null && totalFrames < MAX_STACK_FRAMES) {
+            String header;
+            if (isFirst) {
+                header = current.getClass().getName()
+                        + (current.getMessage() != null ? ": " + current.getMessage() : "");
+                isFirst = false;
+            } else {
+                header = "Caused by: " + current.getClass().getName()
+                        + (current.getMessage() != null ? ": " + current.getMessage() : "");
+            }
+            result.add(header);
+
+            StackTraceElement[] elements = current.getStackTrace();
+            for (StackTraceElement el : elements) {
+                if (totalFrames >= MAX_STACK_FRAMES) break;
+                result.add(String.format("at %s.%s(%s:%d)",
+                        el.getClassName(), el.getMethodName(),
+                        el.getFileName() != null ? el.getFileName() : "Unknown",
+                        el.getLineNumber()));
+                totalFrames++;
+            }
+
+            current = current.getCause();
+        }
+
+        return result;
+    }
+
+    private static boolean isValidLogLevel(String level) {
+        return level != null && switch (level) {
+            case "debug", "info", "warn", "error", "fatal" -> true;
+            default -> false;
+        };
+    }
+}
