@@ -18,6 +18,7 @@ public class DatabaseQueryItem {
     private String traceId;
     private String spanId;
     private int rowsAffected;
+    private String release;
 
     // Builder pattern
     public static Builder builder() { return new Builder(); }
@@ -37,6 +38,7 @@ public class DatabaseQueryItem {
     public String getTraceId() { return traceId; }
     public String getSpanId() { return spanId; }
     public int getRowsAffected() { return rowsAffected; }
+    public String getRelease() { return release; }
 
     public static class Builder {
         private final DatabaseQueryItem item = new DatabaseQueryItem();
@@ -55,6 +57,7 @@ public class DatabaseQueryItem {
         public Builder traceId(String t) { item.traceId = t; return this; }
         public Builder spanId(String s) { item.spanId = s; return this; }
         public Builder rowsAffected(int r) { item.rowsAffected = r; return this; }
+        public Builder release(String r) { item.release = r; return this; }
 
         public DatabaseQueryItem build() {
             if (item.timestampMillis == 0) item.timestampMillis = System.currentTimeMillis();

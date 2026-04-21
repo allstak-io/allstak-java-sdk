@@ -16,16 +16,25 @@ public final class LogEvent {
     private final String userId;
     private final String errorId;
     private final Map<String, Object> metadata;
+    private final String release;
 
     public LogEvent(String level, String message, String service,
                     String traceId, Map<String, Object> metadata) {
-        this(level, message, service, traceId, null, null, null, null, null, metadata);
+        this(level, message, service, traceId, null, null, null, null, null, metadata, null);
     }
 
     public LogEvent(String level, String message, String service,
                     String traceId, String environment, String spanId,
                     String requestId, String userId, String errorId,
                     Map<String, Object> metadata) {
+        this(level, message, service, traceId, environment, spanId,
+                requestId, userId, errorId, metadata, null);
+    }
+
+    public LogEvent(String level, String message, String service,
+                    String traceId, String environment, String spanId,
+                    String requestId, String userId, String errorId,
+                    Map<String, Object> metadata, String release) {
         this.level = level;
         this.message = message;
         this.service = service;
@@ -36,6 +45,7 @@ public final class LogEvent {
         this.userId = userId;
         this.errorId = errorId;
         this.metadata = metadata;
+        this.release = release;
     }
 
     public String getLevel() { return level; }
@@ -48,4 +58,5 @@ public final class LogEvent {
     public String getUserId() { return userId; }
     public String getErrorId() { return errorId; }
     public Map<String, Object> getMetadata() { return metadata; }
+    public String getRelease() { return release; }
 }

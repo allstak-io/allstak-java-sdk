@@ -204,7 +204,7 @@ public final class AllStakClient {
             String env = environment != null ? environment : config.getEnvironment();
 
             LogEvent event = new LogEvent(level, message, svc, traceId, env, spanId,
-                    requestId, userId, errorId, maskedMetadata);
+                    requestId, userId, errorId, maskedMetadata, config.getRelease());
             logBuffer.add(event);
             logFlusher.checkCapacityFlush();
         } catch (Exception e) {
@@ -275,6 +275,7 @@ public final class AllStakClient {
                     .traceId(item.getTraceId())
                     .spanId(item.getSpanId())
                     .rowsAffected(item.getRowsAffected())
+                    .release(item.getRelease() != null ? item.getRelease() : config.getRelease())
                     .build();
 
             dbQueryBuffer.add(enriched);
@@ -311,7 +312,9 @@ public final class AllStakClient {
                     handle.getSlug(),
                     normalizedStatus,
                     durationMs,
-                    message
+                    message,
+                    config.getEnvironment(),
+                    config.getRelease()
             );
 
             // Heartbeats are sent immediately
