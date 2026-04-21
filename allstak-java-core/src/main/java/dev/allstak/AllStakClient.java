@@ -388,6 +388,7 @@ public final class AllStakClient {
             span.put("endTimeMillis", endTimeMillis);
             span.put("service", service != null ? service : config.getServiceName());
             span.put("environment", environment != null ? environment : config.getEnvironment());
+            span.put("release", config.getRelease() != null ? config.getRelease() : "");
             span.put("tags", tags != null ? tags : Map.of());
             span.put("data", "");
 
