@@ -13,6 +13,31 @@
     <artifactId>allstak-spring-boot-starter</artifactId>
     <name>AllStak Java SDK - Spring Boot Starter</name>
     <description>Spring Boot auto-configuration for AllStak SDK</description>
+    <url>https://github.com/allstak-io/allstak-java-sdk</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>allstak</id>
+            <name>AllStak</name>
+            <email>sdk@allstak.sa</email>
+            <organization>AllStak</organization>
+            <organizationUrl>https://allstak.sa</organizationUrl>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:git://github.com/allstak-io/allstak-java-sdk.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/allstak-io/allstak-java-sdk.git</developerConnection>
+        <url>https://github.com/allstak-io/allstak-java-sdk</url>
+    </scm>
 
     <dependencies>
         <dependency>
