@@ -10,7 +10,9 @@
         <version>0.1.1</version>
     </parent>
 
+    <groupId>sa.allstak</groupId>
     <artifactId>allstak-java-core</artifactId>
+    <version>0.1.1</version>
     <name>AllStak Java SDK - Core</name>
     <description>Core SDK library for AllStak observability platform</description>
     <url>https://github.com/allstak-io/allstak-java-sdk</url>
