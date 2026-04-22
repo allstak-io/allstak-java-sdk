@@ -15,7 +15,7 @@ public final class AllStakConfig {
      * The single, static AllStak ingest host. Not customer-configurable on purpose:
      * customers should never have to know or care about which URL their events go to.
      */
-    public static final String INGEST_HOST = "http://localhost:8080";
+    public static final String INGEST_HOST = "https://api.allstak.sa";
 
     private final String apiKey;
     private final String environment;

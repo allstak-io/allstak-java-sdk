@@ -110,7 +110,7 @@ Restart your app. **That's it.** No init code, no `@Configuration`, no `@Bean`. 
 **First error in 60 seconds.** Boot your app and hit any endpoint that throws:
 
 ```bash
-curl http://localhost:8080/api/any-route-that-errors
+curl https://api.allstak.sa/api/any-route-that-errors
 ```
 
 Then open your AllStak dashboard → **Errors**. You'll see the exception with the full stack trace, request context, and trace ID.
