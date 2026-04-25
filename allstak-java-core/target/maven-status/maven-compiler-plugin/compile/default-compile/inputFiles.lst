@@ -15,6 +15,7 @@
 /Volumes/M.2/MyProjects/AllStak-Projects/sdks/allstak-java-sdk/allstak-java-core/src/main/java/dev/allstak/model/DatabaseQueryBatch.java
 /Volumes/M.2/MyProjects/AllStak-Projects/sdks/allstak-java-sdk/allstak-java-core/src/main/java/dev/allstak/model/DatabaseQueryItem.java
 /Volumes/M.2/MyProjects/AllStak-Projects/sdks/allstak-java-sdk/allstak-java-core/src/main/java/dev/allstak/model/ErrorEvent.java
+/Volumes/M.2/MyProjects/AllStak-Projects/sdks/allstak-java-sdk/allstak-java-core/src/main/java/dev/allstak/model/Frame.java
 /Volumes/M.2/MyProjects/AllStak-Projects/sdks/allstak-java-sdk/allstak-java-core/src/main/java/dev/allstak/model/HeartbeatEvent.java
 /Volumes/M.2/MyProjects/AllStak-Projects/sdks/allstak-java-sdk/allstak-java-core/src/main/java/dev/allstak/model/HttpRequestBatch.java
 /Volumes/M.2/MyProjects/AllStak-Projects/sdks/allstak-java-sdk/allstak-java-core/src/main/java/dev/allstak/model/HttpRequestItem.java

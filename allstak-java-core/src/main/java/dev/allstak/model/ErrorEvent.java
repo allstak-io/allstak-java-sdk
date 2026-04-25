@@ -19,6 +19,12 @@ public final class ErrorEvent {
     private final String traceId;
     private final RequestContext requestContext;
     private final List<Breadcrumb> breadcrumbs;
+    // ── Phase 2 — v2 ingest contract additions ────────────────
+    private final String platform;
+    private final String sdkName;
+    private final String sdkVersion;
+    private final String dist;
+    private final List<Frame> frames;
 
     public ErrorEvent(String exceptionClass, String message, List<String> stackTrace,
                       String level, String environment, String release,
@@ -40,6 +46,19 @@ public final class ErrorEvent {
                       String sessionId, UserContext user, Map<String, Object> metadata,
                       String traceId, RequestContext requestContext,
                       List<Breadcrumb> breadcrumbs) {
+        this(exceptionClass, message, stackTrace, level, environment, release,
+                sessionId, user, metadata, traceId, requestContext, breadcrumbs,
+                null, null, null, null, null);
+    }
+
+    /** v2 constructor — all fields. */
+    public ErrorEvent(String exceptionClass, String message, List<String> stackTrace,
+                      String level, String environment, String release,
+                      String sessionId, UserContext user, Map<String, Object> metadata,
+                      String traceId, RequestContext requestContext,
+                      List<Breadcrumb> breadcrumbs,
+                      String platform, String sdkName, String sdkVersion,
+                      String dist, List<Frame> frames) {
         this.exceptionClass = exceptionClass;
         this.message = message;
         this.stackTrace = stackTrace;
@@ -52,6 +71,11 @@ public final class ErrorEvent {
         this.traceId = traceId;
         this.requestContext = requestContext;
         this.breadcrumbs = breadcrumbs;
+        this.platform = platform;
+        this.sdkName = sdkName;
+        this.sdkVersion = sdkVersion;
+        this.dist = dist;
+        this.frames = frames;
     }
 
     public String getExceptionClass() { return exceptionClass; }
@@ -66,4 +90,9 @@ public final class ErrorEvent {
     public String getTraceId() { return traceId; }
     public RequestContext getRequestContext() { return requestContext; }
     public List<Breadcrumb> getBreadcrumbs() { return breadcrumbs; }
+    public String getPlatform() { return platform; }
+    public String getSdkName() { return sdkName; }
+    public String getSdkVersion() { return sdkVersion; }
+    public String getDist() { return dist; }
+    public List<Frame> getFrames() { return frames; }
 }

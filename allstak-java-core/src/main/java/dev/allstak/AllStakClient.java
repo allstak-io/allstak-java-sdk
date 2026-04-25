@@ -125,7 +125,14 @@ public final class AllStakClient {
             String message = throwable.getMessage() != null ? throwable.getMessage() : exceptionClass;
             List<String> stackTrace = extractStackTrace(throwable);
 
-            Map<String, Object> maskedMetadata = DataMasker.maskMetadata(metadata);
+            // Merge release-tracking tags (sdk.name/version, platform, dist,
+            // commit.sha/branch) into metadata. Caller-supplied metadata wins,
+            // then masking runs across the merged result so secrets-in-tags
+            // are still scrubbed.
+            Map<String, Object> mergedMetaErr = new java.util.LinkedHashMap<>();
+            for (var e : config.releaseTags().entrySet()) mergedMetaErr.put(e.getKey(), e.getValue());
+            if (metadata != null) mergedMetaErr.putAll(metadata);
+            Map<String, Object> maskedMetadata = DataMasker.maskMetadata(mergedMetaErr);
 
             // Attach request context if available on this thread
             RequestContext reqCtx = currentRequestContext.get();
@@ -144,6 +151,22 @@ public final class AllStakClient {
             List<Breadcrumb> breadcrumbs = breadcrumbBuffer.drain();
             List<Breadcrumb> eventBreadcrumbs = breadcrumbs.isEmpty() ? null : breadcrumbs;
 
+            // Phase 2 — build structured frames from the JVM stack trace
+            // alongside the legacy v1 string list. Each Throwable.StackTraceElement
+            // is already structured: class, method, file, line. No regex parsing.
+            java.util.List<dev.allstak.model.Frame> frames = new java.util.ArrayList<>();
+            int frameCount = 0;
+            for (StackTraceElement st : throwable.getStackTrace()) {
+                if (frameCount++ >= MAX_STACK_FRAMES) break;
+                String fn = st.getClassName() + "." + st.getMethodName();
+                String file = st.getFileName();
+                boolean inApp = isInApp(st.getClassName());
+                frames.add(new dev.allstak.model.Frame(
+                        file, file, fn,
+                        st.getLineNumber() > 0 ? st.getLineNumber() : null,
+                        null, inApp, "java", null));
+            }
+
             ErrorEvent event = new ErrorEvent(
                     exceptionClass,
                     message,
@@ -156,7 +179,12 @@ public final class AllStakClient {
                     maskedMetadata,
                     traceId,
                     eventReqCtx,
-                    eventBreadcrumbs
+                    eventBreadcrumbs,
+                    config.getPlatform(),
+                    config.getSdkName(),
+                    config.getSdkVersion(),
+                    config.getDist(),
+                    frames.isEmpty() ? null : frames
             );
 
             // Errors are sent immediately — no buffering
@@ -199,7 +227,11 @@ public final class AllStakClient {
                 breadcrumbBuffer.add(new Breadcrumb("log", message, level, metadata));
             }
 
-            Map<String, Object> maskedMetadata = DataMasker.maskMetadata(metadata);
+            // Merge release-tracking tags into log metadata too.
+            Map<String, Object> mergedMetaLog = new java.util.LinkedHashMap<>();
+            for (var e : config.releaseTags().entrySet()) mergedMetaLog.put(e.getKey(), e.getValue());
+            if (metadata != null) mergedMetaLog.putAll(metadata);
+            Map<String, Object> maskedMetadata = DataMasker.maskMetadata(mergedMetaLog);
             String svc = service != null ? service : config.getServiceName();
             String env = environment != null ? environment : config.getEnvironment();
 
@@ -240,8 +272,13 @@ public final class AllStakClient {
                     .responseHeaders(item.getResponseHeaders())
                     .requestBody(item.getRequestBody())
                     .responseBody(item.getResponseBody())
-                    .environment(item.getEnvironment())
-                    .release(item.getRelease())
+                    // Default release/environment to config-level values when
+                    // the caller didn't set them explicitly on the item. This
+                    // is what makes auto-instrumented inbound requests carry
+                    // the release tag without every integration plugin
+                    // having to re-thread it.
+                    .environment(item.getEnvironment() != null ? item.getEnvironment() : config.getEnvironment())
+                    .release(item.getRelease() != null ? item.getRelease() : config.getRelease())
                     .build();
 
             httpBuffer.add(sanitized);
@@ -441,6 +478,27 @@ public final class AllStakClient {
     // =========================================================================
     // Internal
     // =========================================================================
+
+    /**
+     * Heuristic for whether a stack frame is in the customer's app or in
+     * a third-party / JDK library. Conservative: only marks JDK + common
+     * frameworks as out-of-app so the dashboard surfaces customer code
+     * by default rather than hiding it under a toggle.
+     */
+    private static boolean isInApp(String className) {
+        if (className == null) return true;
+        return !(className.startsWith("java.")
+                || className.startsWith("javax.")
+                || className.startsWith("jdk.")
+                || className.startsWith("sun.")
+                || className.startsWith("com.sun.")
+                || className.startsWith("org.springframework.")
+                || className.startsWith("org.apache.")
+                || className.startsWith("org.eclipse.")
+                || className.startsWith("io.netty.")
+                || className.startsWith("ch.qos.logback.")
+                || className.startsWith("dev.allstak."));
+    }
 
     private List<String> extractStackTrace(Throwable throwable) {
         List<String> result = new ArrayList<>();

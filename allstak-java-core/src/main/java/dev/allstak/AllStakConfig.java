@@ -16,6 +16,9 @@ public final class AllStakConfig {
      * customers should never have to know or care about which URL their events go to.
      */
     public static final String INGEST_HOST = "https://api.allstak.sa";
+    /** Hardcoded SDK identity. Sent on the wire as {@code sdk.name} / {@code sdk.version}. */
+    public static final String SDK_NAME = "allstak-java";
+    public static final String SDK_VERSION = "1.2.0";
 
     private final String apiKey;
     private final String environment;
@@ -26,17 +29,40 @@ public final class AllStakConfig {
     private final String serviceName;
     private final boolean autoBreadcrumbs;
     private final int maxBreadcrumbs;
+    // Release-tracking metadata (auto-detected from env when left null).
+    private final String dist;
+    private final String commitSha;
+    private final String branch;
+    private final String platform;
+    private final String sdkName;
+    private final String sdkVersion;
 
     private AllStakConfig(Builder builder) {
         this.apiKey = builder.apiKey;
-        this.environment = builder.environment;
-        this.release = builder.release;
+        this.environment = builder.environment != null ? builder.environment : envOr("ALLSTAK_ENVIRONMENT", "production");
+        this.release = builder.release != null ? builder.release : envOrNull("ALLSTAK_RELEASE", "VERCEL_GIT_COMMIT_SHA", "RAILWAY_GIT_COMMIT_SHA", "RENDER_GIT_COMMIT");
         this.flushIntervalMs = builder.flushIntervalMs;
         this.bufferSize = builder.bufferSize;
         this.debug = builder.debug;
         this.serviceName = builder.serviceName;
         this.autoBreadcrumbs = builder.autoBreadcrumbs;
         this.maxBreadcrumbs = builder.maxBreadcrumbs;
+        this.dist = builder.dist;
+        this.commitSha = builder.commitSha != null ? builder.commitSha : envOrNull("ALLSTAK_COMMIT_SHA", "GIT_COMMIT", "VERCEL_GIT_COMMIT_SHA", "RAILWAY_GIT_COMMIT_SHA", "RENDER_GIT_COMMIT");
+        this.branch = builder.branch != null ? builder.branch : envOrNull("ALLSTAK_BRANCH", "GIT_BRANCH", "VERCEL_GIT_COMMIT_REF", "RAILWAY_GIT_BRANCH");
+        this.platform = builder.platform != null ? builder.platform : "jvm";
+        this.sdkName = builder.sdkName != null ? builder.sdkName : SDK_NAME;
+        this.sdkVersion = builder.sdkVersion != null ? builder.sdkVersion : SDK_VERSION;
+    }
+
+    private static String envOr(String key, String def) {
+        try { String v = System.getenv(key); return (v != null && !v.isEmpty()) ? v : def; } catch (Exception e) { return def; }
+    }
+    private static String envOrNull(String... keys) {
+        for (String k : keys) {
+            try { String v = System.getenv(k); if (v != null && !v.isEmpty()) return v; } catch (Exception ignore) {}
+        }
+        return null;
     }
 
     public String getApiKey() { return apiKey; }
@@ -50,6 +76,29 @@ public final class AllStakConfig {
     public String getServiceName() { return serviceName; }
     public boolean isAutoBreadcrumbs() { return autoBreadcrumbs; }
     public int getMaxBreadcrumbs() { return maxBreadcrumbs; }
+    public String getDist() { return dist; }
+    public String getCommitSha() { return commitSha; }
+    public String getBranch() { return branch; }
+    public String getPlatform() { return platform; }
+    public String getSdkName() { return sdkName; }
+    public String getSdkVersion() { return sdkVersion; }
+
+    /**
+     * Release-tracking tags merged into every event payload's metadata so
+     * the dashboard can group / filter by SDK / platform / commit / branch.
+     * Backend reads these into dedicated columns in a future migration; for
+     * now they ride inside the metadata JSON.
+     */
+    public java.util.Map<String, String> releaseTags() {
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+        if (sdkName != null) out.put("sdk.name", sdkName);
+        if (sdkVersion != null) out.put("sdk.version", sdkVersion);
+        if (platform != null) out.put("platform", platform);
+        if (dist != null) out.put("dist", dist);
+        if (commitSha != null) out.put("commit.sha", commitSha);
+        if (branch != null) out.put("commit.branch", branch);
+        return out;
+    }
 
     public void validate() {
         Objects.requireNonNull(apiKey, "apiKey must not be null");
@@ -78,6 +127,12 @@ public final class AllStakConfig {
         private String serviceName;
         private boolean autoBreadcrumbs = true;
         private int maxBreadcrumbs = 50;
+        private String dist;
+        private String commitSha;
+        private String branch;
+        private String platform;
+        private String sdkName;
+        private String sdkVersion;
 
         private Builder() {}
 
@@ -90,6 +145,12 @@ public final class AllStakConfig {
         public Builder serviceName(String serviceName) { this.serviceName = serviceName; return this; }
         public Builder autoBreadcrumbs(boolean autoBreadcrumbs) { this.autoBreadcrumbs = autoBreadcrumbs; return this; }
         public Builder maxBreadcrumbs(int maxBreadcrumbs) { this.maxBreadcrumbs = maxBreadcrumbs; return this; }
+        public Builder dist(String dist) { this.dist = dist; return this; }
+        public Builder commitSha(String commitSha) { this.commitSha = commitSha; return this; }
+        public Builder branch(String branch) { this.branch = branch; return this; }
+        public Builder platform(String platform) { this.platform = platform; return this; }
+        public Builder sdkName(String sdkName) { this.sdkName = sdkName; return this; }
+        public Builder sdkVersion(String sdkVersion) { this.sdkVersion = sdkVersion; return this; }
 
         public AllStakConfig build() {
             AllStakConfig config = new AllStakConfig(this);

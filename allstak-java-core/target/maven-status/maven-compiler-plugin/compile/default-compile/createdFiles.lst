@@ -17,6 +17,7 @@ dev/allstak/database/AllStakDataSource.class
 dev/allstak/model/HttpRequestItem.class
 dev/allstak/e2e/E2eRunner.class
 dev/allstak/model/LogEvent.class
+dev/allstak/model/Frame.class
 dev/allstak/model/HttpRequestBatch.class
 dev/allstak/database/SqlNormalizer.class
 dev/allstak/transport/RetryPolicy.class

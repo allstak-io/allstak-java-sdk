@@ -38,6 +38,19 @@ public class AllStakProperties {
     private boolean captureDbQueries = true;
     private boolean captureLogs = true;
     private boolean captureScheduled = true;
+    /** Build distribution tag (e.g. "linux-x86_64"). Optional. */
+    private String dist;
+    /** Git commit SHA (auto-detected from GIT_COMMIT / VERCEL_GIT_COMMIT_SHA when blank). */
+    private String commitSha;
+    /** Git branch (auto-detected from GIT_BRANCH / VERCEL_GIT_COMMIT_REF when blank). */
+    private String branch;
+
+    public String getDist() { return dist; }
+    public void setDist(String dist) { this.dist = dist; }
+    public String getCommitSha() { return commitSha; }
+    public void setCommitSha(String commitSha) { this.commitSha = commitSha; }
+    public String getBranch() { return branch; }
+    public void setBranch(String branch) { this.branch = branch; }
 
     public String getApiKey() { return apiKey; }
     public void setApiKey(String apiKey) { this.apiKey = apiKey; }
